@@ -68,13 +68,18 @@ def _encode_powershell_command(command: str) -> str:
     Passing the command this way bypasses every quoting/escaping layer
     (cmd's %-expansion and quote stripping, PowerShell's own $-interpolation
     of the outer string), so variables like ``$shell`` survive intact.
+    A leading ``$ProgressPreference`` guard keeps progress-stream CLIXML noise
+    out of stdout so the text-only LLM gets clean output.
     """
     try:
         import base64
     except Exception:
         return ""
     try:
-        utf16 = str(command).encode("utf-16-le")
+        body = str(command)
+        if not body.lstrip().startswith("$ProgressPreference"):
+            body = "$ProgressPreference='SilentlyContinue'; " + body
+        utf16 = body.encode("utf-16-le")
         return base64.b64encode(utf16).decode("ascii")
     except Exception:
         return ""
@@ -156,24 +161,15 @@ def run_command(
     cwd = str(cwd or "").strip()
     timeout = max(0.5, float(timeout or DEFAULT_TIMEOUT_SECONDS))
 
-    kwargs: dict[str, Any] = {
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.STDOUT,
-        "cwd": cwd or None,
-    }
+    run_kwargs: dict[str, Any] = {"capture_output": True, "timeout": timeout, "cwd": cwd or None}
     if is_windows():
-        kwargs["creationflags"] = _creation_flags()
-        kwargs["close_fds"] = True
+        run_kwargs["creationflags"] = _creation_flags()
+        run_kwargs["close_fds"] = True
     else:
-        kwargs["start_new_session"] = True
+        run_kwargs["start_new_session"] = True
 
     try:
-        completed = subprocess.run(
-            argv,
-            capture_output=False,
-            timeout=timeout,
-            **kwargs,
-        )
+        completed = subprocess.run(argv, **run_kwargs)
     except subprocess.TimeoutExpired:
         return {
             "success": False,

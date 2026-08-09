@@ -12,7 +12,6 @@ Safety:
 
 from __future__ import annotations
 
-import codecs
 import os
 from typing import Any, Optional
 
@@ -86,13 +85,25 @@ def list_dir(root: str, path: str = "", max_entries: int = DEFAULT_MAX_LIST_ENTR
     }
 
 
-def _decode_bytes(raw: bytes) -> str:
+def _decode_bytes(raw: bytes) -> tuple[str, bool]:
+    """Decode ``raw`` as text. Returns (text, is_binary)."""
+    if not raw:
+        return "", False
+    # NUL bytes or a high ratio of control bytes => almost certainly binary.
+    if b"\x00" in raw:
+        return raw.decode("utf-8", errors="replace"), True
+    text = ""
     for enc in _ENCODINGS:
         try:
-            return raw.decode(enc)
+            text = raw.decode(enc)
+            break
         except (UnicodeDecodeError, ValueError):
             continue
-    return raw.decode("utf-8", errors="replace")
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    control = sum(1 for b in raw if b < 9 or 13 < b < 32)
+    is_binary = len(raw) > 0 and (control * 100 // len(raw)) > 30
+    return text, is_binary
 
 
 def read_file(
@@ -106,7 +117,8 @@ def read_file(
     """Read a text file inside ``root``.
 
     Supports a line window via ``start_line``/``line_count`` so large files can
-    be read in slices. Output is bounded by ``max_bytes``.
+    be read in slices. Output is bounded by ``max_bytes``. Binary files are
+    flagged via ``is_binary`` so the caller does not mistake garbage for text.
     """
     target = resolve_path(root, path)
     if target is None:
@@ -126,7 +138,7 @@ def read_file(
     except OSError as exc:
         return {"ok": False, "error": f"无法读取文件：{exc}"}
 
-    text = _decode_bytes(raw)
+    text, is_binary = _decode_bytes(raw)
     truncated_bytes = size > len(raw)
 
     start_line = max(1, int(start_line or 1))
@@ -147,6 +159,7 @@ def read_file(
         "path": path,
         "abs_path": target,
         "size": size,
+        "is_binary": is_binary,
         "truncated_bytes": truncated_bytes,
         "truncated_lines": truncated_lines,
         "line_info": line_info,
