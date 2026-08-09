@@ -56,5 +56,5 @@ command_timeout_seconds = 30
 command_max_output_chars = 4000
 command_default_shell = "auto"
 command_require_confirmation = true
-workspace_root = "C:\\Users\\bits\\Documents\\N.E.K.O-main\\N.E.K.O-main"
+workspace_root = ""
 audio_capture_seconds = 4

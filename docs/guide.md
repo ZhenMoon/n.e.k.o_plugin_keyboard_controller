@@ -212,6 +212,6 @@ command_timeout_seconds = 30    # run_command 超时
 command_max_output_chars = 4000 # run_command 输出截断上限
 command_default_shell = "auto"  # run_command 默认 shell
 command_require_confirmation = true # 执行命令前需用户在面板确认
-workspace_root = "C:\Users\bits\Documents\N.E.K.O-main\N.E.K.O-main" # 文件读写工具的根目录
+workspace_root = ""                # 文件读写工具的根目录（留空=默认 C:\Users\<用户名>\Documents）
 audio_capture_seconds = 4      # 音频分析默认监听秒数
 ```
