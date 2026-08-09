@@ -44,6 +44,7 @@ from . import _screen_capture as capture
 from . import _command_exec as command_exec
 from . import _audio_analysis as audio_analysis
 from . import _file_ops as file_ops
+from . import _template_match as template_match
 from ._key_map import (
     KeySpecError,
     parse_combo,
@@ -989,6 +990,183 @@ class KeyboardControllerPlugin(NekoPluginBase):
             "y": int(y),
             "delta": int(delta or 120),
             "message": f"已在 ({x}, {y}) 滚动滚轮",
+        })
+
+    @llm_tool(
+        name="keyboard_get_window_rect",
+        description=(
+            "获取目标窗口在屏幕上的位置与大小（left/top/right/bottom/width/height），"
+            "以及客户区原点坐标。窗口移动后用它重新定位，配合 keyboard_click_in_window "
+            "用窗口内相对坐标操作，不会因窗口位置变化而点错。"
+        ),
+        parameters={"type": "object", "properties": {}},
+        timeout=15.0,
+    )
+    @plugin_entry(
+        id="get_window_rect",
+        name=tr("entries.getWindowRect.name", default="获取窗口坐标"),
+        description="获取目标窗口的屏幕坐标与客户区信息。",
+        input_schema={"type": "object", "properties": {}},
+        llm_result_fields=["ok", "window_rect", "client_rect", "message"],
+    )
+    async def get_window_rect(self, **_) -> Any:
+        hwnd, window = self._require_operable_window()
+        wrect = await asyncio.to_thread(win32.window_rect, hwnd)
+        crect = await asyncio.to_thread(win32.window_client_rect, hwnd)
+        if wrect is None:
+            return Err(SdkError("无法获取窗口坐标，目标可能已关闭"))
+        return Ok({
+            "ok": True,
+            "window_rect": wrect,
+            "client_rect": crect,
+            "title": str(window.get("title") or ""),
+            "message": f"窗口位于 ({wrect['left']}, {wrect['top']})，{wrect.get('width', wrect['right']-wrect['left'])}x{wrect.get('height', wrect['bottom']-wrect['top'])}",
+        })
+
+    @llm_tool(
+        name="keyboard_click_in_window",
+        description=(
+            "在目标窗口**内部相对坐标** (x, y) 处点击（0,0 = 窗口客户区左上角），"
+            "自动换算为屏幕绝对坐标。窗口移动或拖到别处也不会点错。"
+            "先 keyboard_get_window_rect 了解窗口大小再给坐标。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "description": "窗口内 x（相对客户区左上角）"},
+                "y": {"type": "integer", "description": "窗口内 y（相对客户区左上角）"},
+                "button": {"type": "string", "enum": ["left", "right", "middle"], "default": "left", "description": "鼠标键"},
+                "clicks": {"type": "integer", "default": 1, "description": "点击次数（1=单击，2=双击）"},
+            },
+            "required": ["x", "y"],
+        },
+        timeout=20.0,
+    )
+    @plugin_entry(
+        id="click_in_window",
+        name=tr("entries.clickInWindow.name", default="窗口内点击"),
+        description="在目标窗口内部相对坐标处点击（自动换算屏幕坐标）。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "description": "窗口内 x"},
+                "y": {"type": "integer", "description": "窗口内 y"},
+                "button": {"type": "string", "enum": ["left", "right", "middle"], "default": "left"},
+                "clicks": {"type": "integer", "default": 1},
+            },
+            "required": ["x", "y"],
+        },
+        llm_result_fields=["clicked", "screen_x", "screen_y", "message"],
+    )
+    async def click_in_window(self, x: int, y: int, button: str = "left", clicks: int = 1, **_) -> Any:
+        hwnd, window = self._require_operable_window()
+        self._focus_or_raise(hwnd)
+        converted = await asyncio.to_thread(win32.client_to_screen, hwnd, int(x), int(y))
+        if converted is None:
+            return Err(SdkError("无法换算窗口坐标，目标可能已关闭"))
+        sx, sy = converted
+        clicks = max(1, int(clicks or 1))
+        await asyncio.to_thread(
+            win32.mouse_click, sx, sy, button=str(button or "left"), clicks=clicks,
+        )
+        return Ok({
+            "clicked": True,
+            "screen_x": sx,
+            "screen_y": sy,
+            "clicks": clicks,
+            "message": f"已点击窗口内 ({x}, {y})（屏幕 {sx}, {sy}）",
+        })
+
+    @llm_tool(
+        name="keyboard_find_image",
+        description=(
+            "在屏幕上查找与给定图片（模板）匹配的位置，返回中心坐标，用于点击 OCR 认不出的图标/按钮。"
+            "template_path 是模板图片的绝对路径或工作区相对路径（PNG/JPG，先在本地找图再调用）。"
+            "mode='target' 在目标窗口内找（坐标是窗口内相对坐标，配合 keyboard_click_in_window）；"
+            "mode='fullscreen' 在整屏找（坐标是屏幕绝对坐标）。"
+            "min_score 是匹配阈值（0~1，默认 0.75，越高越严格）。返回坐标 + 置信度，无匹配返回空列表。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "template_path": {"type": "string", "description": "模板图片路径（绝对或工作区相对）"},
+                "mode": {"type": "string", "enum": ["target", "fullscreen"], "default": "target", "description": "查找范围"},
+                "min_score": {"type": "number", "default": 0.75, "description": "匹配阈值"},
+                "max_results": {"type": "integer", "default": 5, "description": "最多返回几个匹配"},
+            },
+            "required": ["template_path"],
+        },
+        timeout=60.0,
+    )
+    @plugin_entry(
+        id="find_image",
+        name=tr("entries.findImage.name", default="查找图片"),
+        description="在屏幕/窗口内查找与模板图片匹配的位置，返回中心坐标。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "template_path": {"type": "string", "description": "模板图片路径"},
+                "mode": {"type": "string", "enum": ["target", "fullscreen"], "default": "target"},
+                "min_score": {"type": "number", "default": 0.75},
+                "max_results": {"type": "integer", "default": 5},
+            },
+            "required": ["template_path"],
+        },
+        llm_result_fields=["ok", "matches", "mode", "message"],
+    )
+    async def find_image(self, template_path: str, mode: str = "target", min_score: float = 0.75, max_results: int = 5, **_) -> Any:
+        if not _is_windows():
+            return Err(SdkError("仅支持 Windows 平台"))
+        if not template_match.is_available():
+            return Err(SdkError("numpy 不可用，无法进行模板匹配"))
+        path = str(template_path or "").strip()
+        if not path:
+            return Err(SdkError("template_path 不能为空"))
+        template_file = os.path.abspath(path)
+        if not os.path.isfile(template_file):
+            ws_path = self._workspace_path()
+            alt = os.path.join(ws_path, path)
+            if os.path.isfile(alt):
+                template_file = alt
+            else:
+                return Err(SdkError(f"找不到模板图片：{path}"))
+        try:
+            from PIL import Image
+            template_image = await asyncio.to_thread(Image.open, template_file)
+            template_image = await asyncio.to_thread(template_image.convert, "RGB")
+        except Exception as exc:
+            return Err(SdkError(f"无法加载模板图片：{exc}"))
+
+        mode = str(mode or "target").strip().lower()
+        if mode not in ("target", "fullscreen"):
+            return Err(SdkError("mode 必须是 'target' 或 'fullscreen'"))
+        try:
+            if mode == "target":
+                if self._target is None:
+                    return Err(SdkError("尚未设置目标窗口，请先调用 set_target（或改用 mode='fullscreen'）"))
+                pid = int(self._target.get("pid") or 0)
+                window = await asyncio.to_thread(capture.target_window_for_capture, pid)
+                if window is None:
+                    return Err(SdkError(f"找不到 pid={pid} 的可见窗口，目标可能已关闭"))
+                frame_image = await asyncio.to_thread(capture.capture_window, window)
+            else:
+                frame_image = await asyncio.to_thread(capture.capture_fullscreen)
+        except Exception as exc:
+            return Err(SdkError(f"截图失败：{exc}"))
+
+        matches = await asyncio.to_thread(
+            template_match.find_template,
+            frame_image, template_image,
+            min_score=float(min_score or 0.75),
+            top_k=int(max_results or 5),
+        )
+        return Ok({
+            "ok": True,
+            "matches": matches,
+            "mode": mode,
+            "count": len(matches),
+            "message": f"找到 {len(matches)} 处匹配"
+                       + ("（target 模式的坐标是窗口内相对坐标，可用 keyboard_click_in_window 点击）" if mode == "target" else "（全屏坐标，可直接 mouse_click）"),
         })
 
     # ── 截图 + OCR（供非视觉模型读屏） ───────────────────────────────

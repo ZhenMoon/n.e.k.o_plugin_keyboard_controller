@@ -312,6 +312,65 @@ def foreground_matches(hwnd: int, pid: int) -> bool:
     return _foreground_matches_target(fg, hwnd, pid)
 
 
+# --- window coordinate helpers -------------------------------------------------------
+def window_rect(hwnd: int) -> Optional[dict[str, int]]:
+    """Return the window rect in screen coordinates: left/top/right/bottom."""
+    if not is_windows() or not hwnd:
+        return None
+    user32 = ctypes.windll.user32
+    rect = RECT()
+    try:
+        if not user32.GetWindowRect(int(hwnd), ctypes.byref(rect)):
+            return None
+    except Exception as exc:
+        _warn("GetWindowRect failed", exc)
+        return None
+    return {
+        "left": int(rect.left),
+        "top": int(rect.top),
+        "right": int(rect.right),
+        "bottom": int(rect.bottom),
+    }
+
+
+def window_client_rect(hwnd: int) -> Optional[dict[str, int]]:
+    """Return the client-area rect in screen coordinates.
+
+    ``left/top`` is the client origin in screen space (already offset by the
+    window frame), ``width/height`` the client size. This is what in-window
+    coordinates (0,0 = client top-left) should be added to.
+    """
+    if not is_windows() or not hwnd:
+        return None
+    user32 = ctypes.windll.user32
+    client = RECT()
+    try:
+        if not user32.GetClientRect(int(hwnd), ctypes.byref(client)):
+            return None
+        origin = wintypes.POINT()
+        if not user32.ClientToScreen(int(hwnd), ctypes.byref(origin)):
+            return None
+    except Exception as exc:
+        _warn("client rect lookup failed", exc)
+        return None
+    return {
+        "left": int(origin.x),
+        "top": int(origin.y),
+        "right": int(origin.x + (client.right - client.left)),
+        "bottom": int(origin.y + (client.bottom - client.top)),
+        "width": int(client.right - client.left),
+        "height": int(client.bottom - client.top),
+    }
+
+
+def client_to_screen(hwnd: int, x: int, y: int) -> Optional[tuple[int, int]]:
+    """Convert an in-window client coordinate to screen absolute."""
+    rect = window_client_rect(hwnd)
+    if rect is None:
+        return None
+    return int(rect["left"]) + int(x), int(rect["top"]) + int(y)
+
+
 # --- foreground focusing ------------------------------------------------------------
 def _root_window_handle(hwnd: int) -> int:
     if not hwnd:
@@ -851,4 +910,7 @@ __all__ = [
     "press_key_combination",
     "tap_key",
     "type_text",
+    "client_to_screen",
+    "window_client_rect",
+    "window_rect",
 ]
