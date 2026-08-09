@@ -62,19 +62,73 @@ def _truncate(text: str, max_chars: int) -> str:
     return f"{text[:head]}\n…[输出已截断，剩余 {len(text) - max_chars} 字符]…\n{text[-tail:]}"
 
 
+def _encode_powershell_command(command: str) -> str:
+    """Encode a PowerShell command as UTF-16LE Base64 for -EncodedCommand.
+
+    Passing the command this way bypasses every quoting/escaping layer
+    (cmd's %-expansion and quote stripping, PowerShell's own $-interpolation
+    of the outer string), so variables like ``$shell`` survive intact.
+    """
+    try:
+        import base64
+    except Exception:
+        return ""
+    try:
+        utf16 = str(command).encode("utf-16-le")
+        return base64.b64encode(utf16).decode("ascii")
+    except Exception:
+        return ""
+
+
 def _build_command(command: str, shell: str) -> list[str]:
     shell = (shell or "auto").strip().lower()
     if is_windows():
         if shell in ("powershell", "pwsh"):
+            encoded = _encode_powershell_command(command)
+            if encoded:
+                return ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
             return ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
         if shell in ("cmd", "cmd.exe", "batch"):
             return ["cmd.exe", "/d", "/s", "/c", command]
         return ["cmd.exe", "/d", "/s", "/c", command]
     if shell in ("powershell", "pwsh"):
+        encoded = _encode_powershell_command(command)
+        if encoded:
+            return ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
         return ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
     if shell in ("bash", "sh"):
         return ["/bin/bash", "-lc", command]
     return ["/bin/sh", "-lc", command]
+
+
+_PS_HINTS = (
+    "$",  # PowerShell variable
+    "-Command",
+    "New-Object",
+    "-ComObject",
+    "Get-Process",
+    "Get-ChildItem -Path",
+    "| Select",
+    "Write-Host",
+    "Get-Item",
+    "Invoke-",
+    "ConvertTo-Json",
+    "Get-WmiObject",
+    "Get-CimInstance",
+    "Get-Content",
+    "Set-Content",
+    "ForEach-Object",
+    "Where-Object",
+)
+
+
+def _looks_like_powershell(command: str) -> bool:
+    """Heuristic: does this command read like PowerShell rather than cmd?"""
+    text = str(command or "").strip()
+    if not text:
+        return False
+    # cmd also uses %, but PowerShell cmdlets are a strong signal.
+    return any(hint in text for hint in _PS_HINTS)
 
 
 def run_command(
@@ -93,6 +147,9 @@ def run_command(
     command = str(command or "").strip()
     if not command:
         return {"success": False, "error": "命令不能为空"}
+
+    if str(shell or "auto").strip().lower() == "auto" and is_windows() and _looks_like_powershell(command):
+        shell = "powershell"
 
     argv = _build_command(command, shell)
     effective_shell = os.path.basename(argv[0]) if is_windows() else argv[0]
