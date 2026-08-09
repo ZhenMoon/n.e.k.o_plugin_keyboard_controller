@@ -1,0 +1,60 @@
+[plugin]
+id = "keyboard_controller"
+name = "按键控制"
+description = "让猫娘通过键盘/鼠标操作电脑上的游戏或软件：定位目标窗口后注入按键、组合键、文本与鼠标点击；支持截图+OCR 让非视觉模型读屏。默认自动启动。"
+short_description = "Control a game/software window with keyboard & mouse input; screenshot + OCR for text-only LLMs."
+keywords = ["按键", "键盘", "hotkey", "keyboard", "快捷键", "鼠标", "mouse", "按键控制", "操控", "game control", "输入注入", "截图", "ocr", "截屏", "screen", "screenshot"]
+version = "0.1.0"
+entry = "plugin.plugins.keyboard_controller:KeyboardControllerPlugin"
+
+[plugin.author]
+name = "N.E.K.O"
+
+[plugin.sdk]
+recommended = ">=0.1.0,<0.2.0"
+supported = ">=0.1.0,<0.3.0"
+
+[plugin.i18n]
+default_locale = "zh-CN"
+locales_dir = "i18n"
+
+[plugin.store]
+enabled = true
+
+[plugin.ui]
+enabled = true
+
+[[plugin.ui.panel]]
+id = "main"
+title = "按键控制"
+entry = "ui/panel.tsx"
+context = "dashboard"
+permissions = ["state:read", "action:call"]
+
+[[plugin.ui.guide]]
+id = "guide"
+title = "使用说明"
+entry = "docs/guide.md"
+permissions = ["state:read"]
+
+[plugin_runtime]
+enabled = true
+auto_start = true
+timeout = 20
+startup_failure = "warn"
+
+[keyboard_controller]
+default_target_window = ""
+allow_unguided_input = false
+focus_retries = 3
+input_delay_seconds = 0.05
+default_type_delay_seconds = 0.01
+capture_max_long_edge = 1920
+ocr_result_max_chars = 2000
+save_screenshots = true
+command_timeout_seconds = 30
+command_max_output_chars = 4000
+command_default_shell = "auto"
+command_require_confirmation = true
+workspace_root = "C:\\Users\\bits\\Documents\\N.E.K.O-main\\N.E.K.O-main"
+audio_capture_seconds = 4
