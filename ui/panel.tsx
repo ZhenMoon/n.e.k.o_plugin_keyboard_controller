@@ -671,10 +671,11 @@ export default function KeyboardControllerPanel(props: PluginSurfaceProps<Dashbo
             {diaryWrite ? (
               <ActionButton
                 action={diaryWrite}
+                refresh={false}
                 onResult={(result: any) => {
-                  const message = result?.message || t("panel.diary.written")
+                  const message = result?.message || (result?.written ? t("panel.diary.written") : t("panel.diary.noEvents"))
                   setFeedback(message)
-                  toast.success(message)
+                  if (result?.written) toast.success(message)
                 }}
                 onError={(error) => setFeedback(error?.message ? error.message : String(error))}
               >

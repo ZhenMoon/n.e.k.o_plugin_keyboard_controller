@@ -82,18 +82,20 @@ def _window_rect_dpi_aware(hwnd: int) -> tuple[int, int, int, int]:
 
 def capture_fullscreen() -> Image.Image:
     """Capture the virtual screen as a PIL RGB image."""
-    try:
-        import mss
+    def _grab() -> Image.Image:
+        try:
+            import mss
 
-        with mss.mss() as sct:
-            monitor = sct.monitors[0]  # virtual screen union
-            shot = sct.grab(monitor)
-            image = Image.frombytes("RGB", shot.size, shot.rgb)
-    except Exception:
-        from PIL import ImageGrab
+            with mss.mss() as sct:
+                monitor = sct.monitors[0]  # virtual screen union
+                shot = sct.grab(monitor)
+                return Image.frombytes("RGB", shot.size, shot.rgb)
+        except Exception:
+            from PIL import ImageGrab
 
-        image = ImageGrab.grab()
-    return _normalize_image(image)
+            return ImageGrab.grab()
+
+    return _normalize_image(_run_with_thread_dpi_awareness(_grab))
 
 
 def capture_window(window: dict[str, Any]) -> Image.Image:
@@ -104,23 +106,29 @@ def capture_window(window: dict[str, Any]) -> Image.Image:
     left, top, right, bottom = _window_rect_dpi_aware(hwnd)
     if right <= left or bottom <= top:
         raise RuntimeError(f"target window has invalid rect ({left},{top},{right},{bottom})")
-    try:
-        import mss
 
-        with mss.mss() as sct:
-            monitor = {
-                "left": int(left),
-                "top": int(top),
-                "width": int(right - left),
-                "height": int(bottom - top),
-            }
-            shot = sct.grab(monitor)
-            image = Image.frombytes("RGB", shot.size, shot.rgb)
-    except Exception:
-        from PIL import ImageGrab
+    def _grab() -> Image.Image:
+        try:
+            import mss
 
-        image = ImageGrab.grab(bbox=(int(left), int(top), int(right), int(bottom)))
-    return _normalize_image(image)
+            with mss.mss() as sct:
+                monitor = {
+                    "left": int(left),
+                    "top": int(top),
+                    "width": int(right - left),
+                    "height": int(bottom - top),
+                }
+                shot = sct.grab(monitor)
+                return Image.frombytes("RGB", shot.size, shot.rgb)
+        except Exception:
+            from PIL import ImageGrab
+
+            return ImageGrab.grab(bbox=(int(left), int(top), int(right), int(bottom)))
+
+    # The DPI-aware rect was read under per-monitor V2 awareness; the fallback
+    # ImageGrab path must run under the same awareness, otherwise on high-DPI
+    # displays it captures the wrong region (offset/scaled).
+    return _normalize_image(_run_with_thread_dpi_awareness(_grab))
 
 
 def _normalize_image(image: Image.Image) -> Image.Image:

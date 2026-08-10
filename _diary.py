@@ -107,6 +107,12 @@ class DiaryLog:
     def set_max_events_per_day(self, value: int) -> None:
         self._max_events_per_day = max(1, int(value))
 
+    def locale(self) -> str:
+        return self._locale
+
+    def max_events_per_day(self) -> int:
+        return self._max_events_per_day
+
     # ── 追加 ─────────────────────────────────────────────────────────
 
     def record(self, kind: str, detail: str, *, ok: bool = True) -> None:
@@ -127,13 +133,6 @@ class DiaryLog:
                 self._dropped[day] = self._dropped.get(day, 0) + 1
                 return
             bucket.append(event)
-
-    def record_sync_guarded(self, kind: str, detail: str, *, ok: bool = True) -> None:
-        """同步安全版本：永不抛出，供内部辅助函数/线程使用。"""
-        try:
-            self.record(kind, detail, ok=ok)
-        except Exception:
-            pass
 
     # ── 读取 ─────────────────────────────────────────────────────────
 

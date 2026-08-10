@@ -587,6 +587,18 @@ def press_combo(modifiers: list[int], main_vk: int, *, delay: float = 0.05) -> N
         _wait_seconds(delay * 0.5)
 
 
+def _unicode_units(text: str) -> list[int]:
+    """Encode text as UTF-16 code units for KEYEVENTF_UNICODE injection.
+
+    Characters outside the BMP (emoji, some CJK extensions) are one Python
+    codepoint but two UTF-16 code units (surrogate pair); each must be sent
+    as its own KEYBDINPUT wScan, otherwise ctypes truncates the 32-bit value
+    into a 16-bit WORD and the wrong character is typed.
+    """
+    raw = str(text or "").encode("utf-16-le", errors="surrogatepass")
+    return [int.from_bytes(raw[i:i + 2], "little") for i in range(0, len(raw), 2)]
+
+
 def type_text(
     text: str,
     *,
@@ -614,15 +626,14 @@ def type_text(
         return True
 
     inputs: list[INPUT] = []
-    for char in text:
-        code = ord(char)
+    for unit in _unicode_units(text):
         inputs.append(INPUT(
             INPUT_KEYBOARD,
-            INPUT_UNION(ki=KEYBDINPUT(0, code, KEYEVENTF_UNICODE, 0, None)),
+            INPUT_UNION(ki=KEYBDINPUT(0, unit, KEYEVENTF_UNICODE, 0, None)),
         ))
         inputs.append(INPUT(
             INPUT_KEYBOARD,
-            INPUT_UNION(ki=KEYBDINPUT(0, code, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, None)),
+            INPUT_UNION(ki=KEYBDINPUT(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, None)),
         ))
 
     for _ in range(max(1, int(retries))):
@@ -674,17 +685,27 @@ def _get_clipboard_text() -> str | None:
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
     try:
+        kernel32.GlobalSize.restype = ctypes.c_size_t
+        kernel32.GlobalSize.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
         if not user32.OpenClipboard(None):
             return None
         try:
             handle = user32.GetClipboardData(13)  # CF_UNICODETEXT
             if not handle:
                 return None
+            size = int(kernel32.GlobalSize(handle))
+            if size <= 0:
+                return None
             ptr = kernel32.GlobalLock(handle)
             if not ptr:
                 return None
             try:
-                return ctypes.wstring_at(ptr)
+                # Cap the read so a non-NUL-terminated clipboard buffer cannot
+                # walk past the allocated memory.
+                max_chars = min(size // 2, 1024 * 1024)
+                return ctypes.wstring_at(ptr, max_chars)
             finally:
                 kernel32.GlobalUnlock(handle)
         finally:

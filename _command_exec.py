@@ -42,14 +42,30 @@ def _encoding() -> str:
         return "utf-8"
 
 
+def _oem_encoding() -> str:
+    """Return the Windows OEM code page (what cmd.exe actually emits)."""
+    if is_windows():
+        try:
+            import ctypes
+
+            cp = ctypes.windll.kernel32.GetOEMCP()
+            if cp:
+                return f"cp{int(cp)}"
+        except Exception:
+            pass
+    return _encoding()
+
+
 def _decode(data: bytes) -> str:
     if not data:
         return ""
-    enc = _encoding()
-    try:
-        return data.decode(enc, errors="replace")
-    except Exception:
-        return data.decode("utf-8", errors="replace")
+    enc = _oem_encoding()
+    for candidate in (enc, "utf-8"):
+        try:
+            return data.decode(candidate, errors="replace")
+        except (LookupError, ValueError):
+            continue
+    return data.decode("utf-8", errors="replace")
 
 
 def _truncate(text: str, max_chars: int) -> str:
@@ -92,7 +108,9 @@ def _build_command(command: str, shell: str) -> list[str]:
             encoded = _encode_powershell_command(command)
             if encoded:
                 return ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
-            return ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+            # EncodedCommand is the only quoting-safe path; refuse to fall back
+            # to -Command which would re-parse $, quotes and ; on the command line.
+            return []
         if shell in ("cmd", "cmd.exe", "batch"):
             return ["cmd.exe", "/d", "/s", "/c", command]
         return ["cmd.exe", "/d", "/s", "/c", command]
@@ -100,7 +118,7 @@ def _build_command(command: str, shell: str) -> list[str]:
         encoded = _encode_powershell_command(command)
         if encoded:
             return ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
-        return ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+        return []
     if shell in ("bash", "sh"):
         return ["/bin/bash", "-lc", command]
     return ["/bin/sh", "-lc", command]
@@ -157,6 +175,14 @@ def run_command(
         shell = "powershell"
 
     argv = _build_command(command, shell)
+    if not argv:
+        return {
+            "success": False,
+            "returncode": None,
+            "output": "无法构造安全的 shell 调用（PowerShell -EncodedCommand 编码失败）。",
+            "command": command,
+            "shell": str(shell),
+        }
     effective_shell = os.path.basename(argv[0]) if is_windows() else argv[0]
     cwd = str(cwd or "").strip()
     timeout = max(0.5, float(timeout or DEFAULT_TIMEOUT_SECONDS))

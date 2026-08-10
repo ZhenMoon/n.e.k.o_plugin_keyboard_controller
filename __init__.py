@@ -2132,10 +2132,10 @@ class KeyboardControllerPlugin(NekoPluginBase):
             "dir": str(self._diary_dir_path()),
             "event_count": sum(counts.values()),
             "counts": counts,
-            "summary": diary.summarize_counts(counts, locale=self._diary._locale),
+            "summary": diary.summarize_counts(counts, locale=self._diary.locale()),
             "flushed": bool((self._diary_dir_path() / f"{day}.md").is_file()),
             "auto_flush_seconds": self._diary_flush_seconds,
-            "max_events_per_day": self._diary._max_events_per_day,
+            "max_events_per_day": self._diary.max_events_per_day(),
         })
 
     @llm_tool(
@@ -2160,10 +2160,14 @@ class KeyboardControllerPlugin(NekoPluginBase):
         description="把今天记录的操作整理成 Markdown 日记写入 memories/。",
     )
     async def diary_write_now(self, **_) -> Any:
+        if self._diary is None:
+            return Err(SdkError("日记未初始化"))
         day = datetime.now().strftime("%Y-%m-%d")
-        path = await self._diary_flush_if_due(force=True)
-        if path is None:
+        written = await self._diary_flush_if_due(force=True)
+        if not written:
             return Ok({"date": day, "written": False, "message": "今天还没有可写入的日记事件"})
+        root = self._diary_dir_path()
+        path = root / f"{day}.md"
         return Ok({
             "date": day,
             "written": True,
@@ -2187,6 +2191,13 @@ class KeyboardControllerPlugin(NekoPluginBase):
             },
         },
         timeout=10.0,
+    )
+    @ui.action(
+        label=tr("actions.diaryRead.label", default="Read diary"),
+        icon="D",
+        group="diary",
+        order=30,
+        refresh_context=False,
     )
     @plugin_entry(
         id="diary_read",
@@ -2340,7 +2351,7 @@ class KeyboardControllerPlugin(NekoPluginBase):
             diary_state["date"] = day
             diary_state["event_count"] = sum(counts.values())
             diary_state["counts"] = counts
-            diary_state["summary"] = diary.summarize_counts(counts, locale=self._diary._locale)
+            diary_state["summary"] = diary.summarize_counts(counts, locale=self._diary.locale())
             diary_state["flushed"] = bool((self._diary_dir_path() / f"{day}.md").is_file())
         return {
             "platform": sys.platform,
