@@ -68,3 +68,36 @@ def test_diary_respects_max_events() -> None:
     day = _diary._day_key()
     assert log.counts(day)["note"] == 2
     assert log.dropped(day) == 1
+
+
+def test_flush_all_pending_writes_cross_day_buckets(tmp_path: Path) -> None:
+    _diary = _load_diary_module()
+    log = _diary.DiaryLog(enabled=True, locale="zh-CN")
+    # 模拟昨晚 23:59 与今天 00:05 的事件落入不同日期桶
+    log._events.setdefault("2026-08-09", []).append(
+        {"ts": 0, "kind": "input", "detail": "昨晚的按键", "ok": True}
+    )
+    log._events.setdefault("2026-08-10", []).append(
+        {"ts": 0, "kind": "input", "detail": "今天的按键", "ok": True}
+    )
+    written = log.flush_all_pending(tmp_path)
+    names = {p.name for p in written}
+    assert "2026-08-09.md" in names
+    assert "2026-08-10.md" in names
+    # 昨天及更早的桶写盘后清空，避免内存无限增长
+    assert log.events("2026-08-09") == []
+    assert (tmp_path / "2026-08-09.md").is_file()
+    assert "昨晚的按键" in (tmp_path / "2026-08-09.md").read_text(encoding="utf-8")
+
+
+def test_read_day_counts_events_from_disk(tmp_path: Path) -> None:
+    _diary = _load_diary_module()
+    log = _diary.DiaryLog(enabled=True, locale="zh-CN")
+    log.record("note", "a")
+    log.record("input", "b")
+    day = _diary._day_key()
+    log.flush_day(tmp_path, day)
+    log.clear_day(day)
+    data = log.read_day(tmp_path, day)
+    assert data["event_count"] == 2
+    assert data["markdown"] != ""

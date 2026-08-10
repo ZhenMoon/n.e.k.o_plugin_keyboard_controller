@@ -206,7 +206,11 @@ class DiaryLog:
     # ── 写盘 ─────────────────────────────────────────────────────────
 
     def flush_day(self, root: Path | str, day: str, *, title: str | None = None) -> Path | None:
-        """把某天事件写入 ``root/YYYY-MM-DD.md``。无事件返回 None。"""
+        """把某天事件写入 ``root/YYYY-MM-DD.md``。无事件返回 None。
+
+        写盘后不自动清空内存桶，因为插件可能在同一天继续追加事件（后续
+        flush 会整体重写同一文件，保证内容完整不重复）。
+        """
         if not self._enabled:
             return None
         markdown = self.render_markdown(day, title=title)
@@ -224,6 +228,29 @@ class DiaryLog:
             return None
         return path
 
+    def flush_all_pending(self, root: Path | str) -> list[Path]:
+        """把**所有**未写盘的日期都落盘，返回写出的文件列表。
+
+        修复跨天丢事件：定时器可能跨过午夜才触发，此时 ``_day_key()``
+        已指向新的一天；若只 flush 当天，昨天 23:00 后记录但尚未写盘的
+        事件会一直留在内存，插件重启即丢。此方法遍历全部已分桶日期，
+        并清除已成功写盘的旧桶（昨天及更早），避免内存无限增长。
+        """
+        if not self._enabled:
+            return []
+        root_path = Path(root)
+        written: list[Path] = []
+        today = _day_key()
+        with self._lock:
+            days = list(self._events.keys())
+        for day in days:
+            path = self.flush_day(root_path, day)
+            if path is not None:
+                written.append(path)
+                if day != today:
+                    self.clear_day(day)
+        return written
+
     def read_day(self, root: Path | str, day: str) -> dict[str, Any]:
         """读回某天已落盘的日记；没有则返回事件缓冲摘要。"""
         root_path = Path(root)
@@ -240,10 +267,21 @@ class DiaryLog:
             "file": str(path),
             "exists": bool(text),
             "markdown": text or self.render_markdown(day),
-            "event_count": len(events),
+            "event_count": len(events) if events else self._count_events_in_markdown(text),
             "counts": self.counts(day),
             "dropped": self.dropped(day),
         }
+
+    @staticmethod
+    def _count_events_in_markdown(text: str) -> int:
+        if not text:
+            return 0
+        count = 0
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- `") and "`" in stripped[3:]:
+                count += 1
+        return count
 
 
 def summarize_counts(counts: dict[str, int], *, locale: str = "zh-CN") -> str:

@@ -167,8 +167,7 @@ class KeyboardControllerPlugin(NekoPluginBase):
         try:
             if self._diary is not None and self._diary.enabled():
                 root = self._diary_dir_path()
-                day = datetime.now().strftime("%Y-%m-%d")
-                self._diary.flush_day(root, day)
+                self._diary.flush_all_pending(root)
         except Exception:
             pass
         return Ok({"status": "shutdown"})
@@ -206,7 +205,7 @@ class KeyboardControllerPlugin(NekoPluginBase):
             self.logger.debug("diary record skipped: {}", exc)
 
     async def _diary_flush_if_due(self, *, force: bool = False) -> bool:
-        """若距上次写盘超过间隔（或 force），把今天的事件落到磁盘。"""
+        """若距上次写盘超过间隔（或 force），把所有未写盘日期落到磁盘。"""
         if self._diary is None or not self._diary.enabled():
             return False
         now = time.time()
@@ -214,12 +213,12 @@ class KeyboardControllerPlugin(NekoPluginBase):
             return False
         try:
             root = self._diary_dir_path()
-            day = datetime.now().strftime("%Y-%m-%d")
-            path = await asyncio.to_thread(self._diary.flush_day, root, day)
+            written = await asyncio.to_thread(self._diary.flush_all_pending, root)
             self._diary_last_flush = now
-            if path is not None:
+            if written:
+                day = datetime.now().strftime("%Y-%m-%d")
                 await self.store.set(_STORE_DIARY_DAY_KEY, day)
-            return path is not None
+            return bool(written)
         except Exception as exc:
             self.logger.debug("diary flush failed: {}", exc)
             return False
