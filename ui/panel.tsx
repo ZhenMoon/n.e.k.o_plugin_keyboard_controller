@@ -53,7 +53,18 @@ type DashboardState = {
   command_require_confirmation?: boolean
   pending_commands?: PendingCommand[]
   audio_available?: boolean
+  diary?: DiaryState
   message?: string | null
+}
+
+type DiaryState = {
+  enabled?: boolean
+  date?: string
+  dir?: string
+  event_count?: number
+  counts?: Record<string, number>
+  summary?: string
+  flushed?: boolean
 }
 
 type PendingCommand = {
@@ -96,6 +107,10 @@ export default function KeyboardControllerPanel(props: PluginSurfaceProps<Dashbo
   const getWindowRect = safeActions.find((action) => action.id === "get_window_rect")
   const clickInWindow = safeActions.find((action) => action.id === "click_in_window")
   const findImage = safeActions.find((action) => action.id === "find_image")
+  const diaryWrite = safeActions.find((action) => action.id === "diary_write_now")
+  const diaryStatus = safeActions.find((action) => action.id === "diary_status")
+  const setDiaryEnabled = safeActions.find((action) => action.id === "set_diary_enabled")
+  const diaryRead = safeActions.find((action) => action.id === "diary_read")
 
   const toast = useToast()
   const [searchQuery, setSearchQuery] = props.useLocalState<string>("searchQuery", "")
@@ -118,6 +133,8 @@ export default function KeyboardControllerPanel(props: PluginSurfaceProps<Dashbo
   const [imagePath, setImagePath] = props.useLocalState<string>("imagePath", "")
   const [imageMode, setImageMode] = props.useLocalState<string>("imageMode", "target")
   const [imageResult, setImageResult] = props.useLocalState<string>("imageResult", "")
+  const [diaryDate, setDiaryDate] = props.useLocalState<string>("diaryDate", "")
+  const [diaryReadResult, setDiaryReadResult] = props.useLocalState<string>("diaryReadResult", "")
   const [resultMessage, setResultMessage, debouncedResultMessage] = useDebouncedState("", 2500)
 
   const target = safeState.target || null
@@ -376,6 +393,17 @@ export default function KeyboardControllerPanel(props: PluginSurfaceProps<Dashbo
     }
   }
 
+  const doDiaryToggle = async () => {
+    if (!setDiaryEnabled) return
+    try {
+      const result = await props.api.call("set_diary_enabled", { enabled: !safeState.diary?.enabled })
+      setFeedback(result?.message || "")
+      toast.success(result?.message || "")
+    } catch (error) {
+      setFeedback(error && error.message ? error.message : String(error))
+    }
+  }
+
   return (
     <Page title={t("panel.title")} subtitle={t("panel.subtitle")}>
       <Toolbar>
@@ -616,6 +644,74 @@ export default function KeyboardControllerPanel(props: PluginSurfaceProps<Dashbo
             </>
           ) : null}
           <Tip>{t("panel.findImage.tip")}</Tip>
+        </Stack>
+      </Card>
+
+      <Card title={t("panel.diary.title")}>
+        <Stack>
+          <StatusBadge tone={safeState.diary?.enabled ? "success" : "warning"}>
+            {safeState.diary?.enabled ? t("panel.diary.on") : t("panel.diary.off")}
+          </StatusBadge>
+          <KeyValue
+            items={[
+              { label: t("panel.diary.date"), value: safeState.diary?.date || "-" },
+              { label: t("panel.diary.eventCount"), value: String(safeState.diary?.event_count ?? 0) },
+              { label: t("panel.diary.summary"), value: safeState.diary?.summary || t("panel.diary.noEvents") },
+            ]}
+          />
+          <ButtonGroup>
+            {setDiaryEnabled ? (
+              <Button
+                tone={safeState.diary?.enabled ? "default" : "success"}
+                onClick={doDiaryToggle}
+              >
+                {safeState.diary?.enabled ? t("panel.diary.turnOff") : t("panel.diary.turnOn")}
+              </Button>
+            ) : null}
+            {diaryWrite ? (
+              <ActionButton
+                action={diaryWrite}
+                onResult={(result: any) => {
+                  const message = result?.message || t("panel.diary.written")
+                  setFeedback(message)
+                  toast.success(message)
+                }}
+                onError={(error) => setFeedback(error?.message ? error.message : String(error))}
+              >
+                {t("panel.diary.writeNow")}
+              </ActionButton>
+            ) : null}
+          </ButtonGroup>
+          <Divider />
+          <Field label={t("panel.diary.readDate")} help={t("panel.diary.readDateHelp")}>
+            <Input value={diaryDate} placeholder={t("panel.diary.datePlaceholder")} onChange={setDiaryDate} />
+          </Field>
+          <ButtonGroup>
+          {diaryRead ? (
+            <ActionButton
+              action={diaryRead}
+              values={{ date: diaryDate }}
+              onResult={(result: any) => {
+                setDiaryReadResult(String(result?.markdown || result?.message || ""))
+                setFeedback(result?.message || t("panel.diary.readResult"))
+              }}
+              onError={(error) => {
+                setDiaryReadResult("")
+                setFeedback(error?.message ? error.message : String(error))
+              }}
+            >
+              {t("panel.diary.read")}
+            </ActionButton>
+          ) : null}
+          </ButtonGroup>
+          {diaryReadResult ? (
+            <>
+              <Divider />
+              <Text>{t("panel.diary.readResult")}</Text>
+              <pre className="neko-pre">{diaryReadResult}</pre>
+            </>
+          ) : null}
+          <Tip>{t("panel.diary.tip")}</Tip>
         </Stack>
       </Card>
 

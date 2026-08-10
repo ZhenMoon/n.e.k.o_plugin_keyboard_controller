@@ -146,6 +146,40 @@
 - `duration` 是监听秒数（默认 4，上限 15）。
 - 电脑没在放声音时返回 `silence=true`；numpy 缺失或非 Windows 时 `available=false`。
 
+### 自动写日记
+
+插件会把一天内发生的操作（目标窗口切换、按键/鼠标注入、截图 OCR、文字查找、Shell 命令、音频分析、窗口操作）自动整理成 Markdown 日记。默认每小时写盘一次到 `memories/YYYY-MM-DD.md`（路径相对插件数据目录，可用 `diary_dir` 改），命名与 N.E.K.O memory 系统的 daily journal 约定一致，memory 会自动把日记导入并提炼成 facts。
+
+| 工具名 | 作用 |
+|---|---|
+| `diary_status()` | 日记功能状态与今日统计（今天做了什么） |
+| `diary_write_now()` | 立即把今天的事件整理并写入 `memories/` |
+| `diary_read(date)` | 读取某天的日记 Markdown（date 留空读今天） |
+| `diary_note(detail)` | 往今天的日记追加一条随笔（感想/约定等） |
+
+日记长这样：
+
+```markdown
+# 2026-08-10
+
+## 目标窗口
+- `14:02` 设置目标窗口：My Game（pid 1234）
+
+## 按键 / 鼠标输入
+- `14:05` 按键 ctrl+c ×1 → My Game
+
+## 截图 / OCR
+- `14:06` target 截图 1280x720，OCR 42 字符
+
+## 随笔
+- `14:20` 今天帮主人把存档备份好了
+```
+
+- 跨天自动切换文件；写盘失败/关闭不丢失（重启后继续累积）。
+- 每天最多记录 `diary_max_events_per_day` 条（默认 300），超出丢弃并计数。
+- 面板「日记」卡片可查看今日统计、立即写盘、读取指定日期。
+- 配置 `diary_enabled = false` 可整体关闭（面板可随时开关）。
+
 ## 面板使用流程
 
 1. 插件默认自动启动；未启动时在 Plugin Manager 里手动启动。
@@ -182,6 +216,11 @@
 | `analyze_audio(duration)` | 监听主机播放声音并返回频谱特征 |
 | `audio_status()` | 音频分析可用性 |
 | `list_supported_keys()` | 列出所有支持的键名 |
+| `diary_status()` | 日记功能状态与今日统计 |
+| `diary_write_now()` | 立即把今天的事件写入日记 |
+| `diary_read(date)` | 读取某天的日记 |
+| `diary_note(detail)` | 往今天的日记追加随笔 |
+| `set_diary_enabled(enabled)` | 开关自动写日记 |
 
 ## 组合键写法
 
@@ -214,4 +253,9 @@ command_default_shell = "auto"  # run_command 默认 shell
 command_require_confirmation = true # 执行命令前需用户在面板确认
 workspace_root = ""                # 文件读写工具的根目录（留空=默认 C:\Users\<用户名>\Documents）
 audio_capture_seconds = 4      # 音频分析默认监听秒数
+diary_enabled = true           # 是否自动写日记
+diary_dir = "memories"         # 日记目录（相对插件数据目录）
+diary_auto_flush_seconds = 3600 # 日记自动写盘间隔（秒）
+diary_max_events_per_day = 300 # 每天最多记录的事件数
+diary_locale = "zh-CN"         # 日记分组标题语言（zh-CN / en）
 ```

@@ -23,6 +23,8 @@ import os
 import sys
 import time
 import uuid
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 
 from plugin.sdk.plugin import (
@@ -34,6 +36,7 @@ from plugin.sdk.plugin import (
     llm_tool,
     neko_plugin,
     plugin_entry,
+    timer_interval,
     tr,
     ui,
     unwrap_or,
@@ -41,6 +44,7 @@ from plugin.sdk.plugin import (
 
 from . import _audio_analysis as audio_analysis
 from . import _command_exec as command_exec
+from . import _diary as diary
 from . import _file_ops as file_ops
 from . import _screen_capture as capture
 from . import _template_match as template_match
@@ -53,6 +57,8 @@ from ._key_map import (
 
 _STORE_TARGET_KEY = "target"
 _STORE_CONFIRM_KEY = "command_require_confirmation"
+_STORE_DIARY_KEY = "diary_enabled"
+_STORE_DIARY_DAY_KEY = "diary_last_written_day"
 _PENDING_MAX = 20
 _PENDING_TTL_SECONDS = 600.0
 
@@ -75,6 +81,11 @@ class KeyboardControllerPlugin(NekoPluginBase):
         self._input_delay = 0.05
         self._type_delay = 0.01
         self._save_screenshots = True
+        self._diary: Optional[diary.DiaryLog] = None
+        self._diary_enabled = True
+        self._diary_dir = "memories"
+        self._diary_flush_seconds = diary.DEFAULT_AUTO_FLUSH_SECONDS
+        self._diary_last_flush = 0.0
 
     # ── 生命周期 ──────────────────────────────────────────────────────
 
@@ -98,6 +109,25 @@ class KeyboardControllerPlugin(NekoPluginBase):
         self._command_require_confirmation = bool(kb_cfg.get("command_require_confirmation", True))
         self._pending_commands: list[dict[str, Any]] = []
         self._pending_lock = asyncio.Lock()
+
+        # ── 日记 ─────────────────────────────────────────────────────
+        stored_diary_enabled = unwrap_or(await self.store.get(_STORE_DIARY_KEY), None)
+        if isinstance(stored_diary_enabled, bool):
+            self._diary_enabled = stored_diary_enabled
+        else:
+            self._diary_enabled = bool(kb_cfg.get("diary_enabled", True))
+            await self.store.set(_STORE_DIARY_KEY, self._diary_enabled)
+        self._diary_dir = str(kb_cfg.get("diary_dir", "memories") or "memories").strip()
+        self._diary_flush_seconds = max(
+            30, int(kb_cfg.get("diary_auto_flush_seconds", diary.DEFAULT_AUTO_FLUSH_SECONDS))
+        )
+        self._diary = diary.DiaryLog(
+            enabled=self._diary_enabled,
+            max_events_per_day=int(kb_cfg.get("diary_max_events_per_day", diary.DEFAULT_MAX_EVENTS_PER_DAY)),
+            locale=str(kb_cfg.get("diary_locale", "zh-CN") or "zh-CN"),
+        )
+        self._diary_last_flush = time.time()
+
         self._workspace_root = str(kb_cfg.get("workspace_root", "") or "").strip()
         if not _is_windows():
             self.logger.warning("keyboard_controller only supports Windows; input entries will fail")
@@ -134,6 +164,13 @@ class KeyboardControllerPlugin(NekoPluginBase):
             capture.close_ocr_backend()
         except Exception:
             pass
+        try:
+            if self._diary is not None and self._diary.enabled():
+                root = self._diary_dir_path()
+                day = datetime.now().strftime("%Y-%m-%d")
+                self._diary.flush_day(root, day)
+        except Exception:
+            pass
         return Ok({"status": "shutdown"})
 
     # ── 内部辅助 ───────────────────────────────────────────────────────
@@ -153,6 +190,39 @@ class KeyboardControllerPlugin(NekoPluginBase):
             await self.store.delete(_STORE_TARGET_KEY)
         else:
             await self.store.set(_STORE_TARGET_KEY, target)
+
+    # ── 日记辅助 ─────────────────────────────────────────────────────
+
+    def _diary_dir_path(self) -> Path:
+        base = self.data_path()
+        return Path(base).joinpath(self._diary_dir)
+
+    def _diary_record(self, kind: str, detail: str, *, ok: bool = True) -> None:
+        if self._diary is None:
+            return
+        try:
+            self._diary.record(kind, detail, ok=ok)
+        except Exception as exc:
+            self.logger.debug("diary record skipped: {}", exc)
+
+    async def _diary_flush_if_due(self, *, force: bool = False) -> bool:
+        """若距上次写盘超过间隔（或 force），把今天的事件落到磁盘。"""
+        if self._diary is None or not self._diary.enabled():
+            return False
+        now = time.time()
+        if not force and now - self._diary_last_flush < self._diary_flush_seconds:
+            return False
+        try:
+            root = self._diary_dir_path()
+            day = datetime.now().strftime("%Y-%m-%d")
+            path = await asyncio.to_thread(self._diary.flush_day, root, day)
+            self._diary_last_flush = now
+            if path is not None:
+                await self.store.set(_STORE_DIARY_DAY_KEY, day)
+            return path is not None
+        except Exception as exc:
+            self.logger.debug("diary flush failed: {}", exc)
+            return False
 
     def _require_operable_window(self) -> tuple[int, dict[str, Any]]:
         """解析注入目标，返回 (hwnd, window)。未满足安全边界时抛 SdkError。"""
@@ -382,6 +452,7 @@ class KeyboardControllerPlugin(NekoPluginBase):
             return Err(SdkError(f"安全策略拒绝设置该目标：{block}"))
         self._target = target
         await self._persist_target(target)
+        self._diary_record("target", f"设置目标窗口：{target['title']}（pid {target['pid']}）")
         self.logger.info("target set: pid={} title={}", target["pid"], target["title"])
         return Ok({"target": target, "message": f"目标窗口已设为：{target['title']}（pid {target['pid']}）"})
 
@@ -440,6 +511,7 @@ class KeyboardControllerPlugin(NekoPluginBase):
     async def clear_target(self, **_) -> Any:
         self._target = None
         await self._persist_target(None)
+        self._diary_record("target", "清除目标窗口")
         return Ok({"target": None, "message": "目标窗口已清除"})
 
     # ── 键盘注入 ───────────────────────────────────────────────────────
@@ -505,6 +577,10 @@ class KeyboardControllerPlugin(NekoPluginBase):
                 win32.press_combo(modifiers, main_vk, delay=self._input_delay)
 
         await asyncio.to_thread(_inject)
+        self._diary_record(
+            "input",
+            f"按键 {keys} ×{max(1, int(count))} → {window.get('title')}",
+        )
         return Ok({
             "pressed": True,
             "keys": str(keys),
@@ -558,6 +634,10 @@ class KeyboardControllerPlugin(NekoPluginBase):
             return Err(SdkError(str(exc)))
         self._focus_or_raise(hwnd)
         await asyncio.to_thread(win32.hold_key, str(keys), seconds=max(0.05, float(seconds or 1.0)))
+        self._diary_record(
+            "input",
+            f"长按 {keys} {max(0.05, float(seconds or 1.0))} 秒 → {window.get('title')}",
+        )
         return Ok({
             "held": True,
             "keys": str(keys),
@@ -613,6 +693,10 @@ class KeyboardControllerPlugin(NekoPluginBase):
             payload,
             char_delay=self._type_delay,
             use_clipboard=True,
+        )
+        self._diary_record(
+            "input",
+            f"输入文本 {len(payload)} 字符{'（剪贴板粘贴）' if used_clipboard else ''} → {window.get('title')}",
         )
         return Ok({
             "typed": True,
@@ -769,6 +853,7 @@ class KeyboardControllerPlugin(NekoPluginBase):
                         win32.press_combo(item["modifiers"], item["main_vk"], delay=item["delay"])
 
         await asyncio.to_thread(_run)
+        self._diary_record("input", f"按键序列 {len(parsed)} 步 → {window.get('title')}")
         return Ok({
             "executed": True,
             "steps": len(parsed),
@@ -879,6 +964,10 @@ class KeyboardControllerPlugin(NekoPluginBase):
             button=str(button or "left"),
             clicks=clicks,
         )
+        self._diary_record(
+            "input",
+            f"鼠标{str(button or 'left')}键点击 ({x}, {y}) ×{clicks}",
+        )
         return Ok({
             "clicked": True,
             "x": int(x),
@@ -940,6 +1029,10 @@ class KeyboardControllerPlugin(NekoPluginBase):
             button=str(button or "left"),
             steps=int(steps or 20),
         )
+        self._diary_record(
+            "input",
+            f"鼠标拖拽 ({x1}, {y1}) → ({x2}, {y2})",
+        )
         return Ok({
             "dragged": True,
             "from": [int(x1), int(y1)],
@@ -983,6 +1076,10 @@ class KeyboardControllerPlugin(NekoPluginBase):
         if not _is_windows():
             return Err(SdkError("仅支持 Windows 平台"))
         await asyncio.to_thread(win32.mouse_wheel, int(x), int(y), delta=int(delta or 120))
+        self._diary_record(
+            "input",
+            f"滚轮滚动 ({x}, {y}) delta={int(delta or 120)}",
+        )
         return Ok({
             "scrolled": True,
             "x": int(x),
@@ -1021,6 +1118,10 @@ class KeyboardControllerPlugin(NekoPluginBase):
         crect = await asyncio.to_thread(win32.window_client_rect, hwnd)
         if wrect is None:
             return Err(SdkError("无法获取窗口坐标，目标可能已关闭"))
+        self._diary_record(
+            "window",
+            f"获取窗口坐标 {wrect.get('width', wrect['right']-wrect['left'])}x{wrect.get('height', wrect['bottom']-wrect['top'])} @({wrect['left']}, {wrect['top']})",
+        )
         return Ok({
             "ok": True,
             "window_rect": wrect,
@@ -1081,6 +1182,10 @@ class KeyboardControllerPlugin(NekoPluginBase):
         clicks = max(1, int(clicks or 1))
         await asyncio.to_thread(
             win32.mouse_click, sx, sy, button=str(button or "left"), clicks=clicks,
+        )
+        self._diary_record(
+            "input",
+            f"窗口内{str(button or 'left')}键点击 ({x}, {y}) ×{clicks}",
         )
         return Ok({
             "clicked": True,
@@ -1299,6 +1404,12 @@ class KeyboardControllerPlugin(NekoPluginBase):
         else:
             message += f"，OCR 不可用或失败（status={ocr_status}）"
 
+        self._diary_record(
+            "capture",
+            f"{mode} 截图 {width}x{height}，OCR {len(text)} 字符",
+            ok=ocr_status == "ok",
+        )
+
         return Ok({
             "mode": mode,
             "text": text,
@@ -1392,6 +1503,7 @@ class KeyboardControllerPlugin(NekoPluginBase):
             capture.ocr_image_with_boxes, image, max_boxes=int(max_results or 5), query=query,
         )
         if status == "no_match":
+            self._diary_record("text", f"查找「{query}」未找到（{mode}）")
             return Ok({
                 "status": "no_match",
                 "matches": [],
@@ -1402,6 +1514,10 @@ class KeyboardControllerPlugin(NekoPluginBase):
         if status != "ok":
             return Err(SdkError(f"OCR 不可用或失败（status={status}）"))
 
+        self._diary_record(
+            "text",
+            f"查找「{query}」找到 {len(matches)} 处（{mode}）",
+        )
         return Ok({
             "status": "ok",
             "matches": matches,
@@ -1560,6 +1676,11 @@ class KeyboardControllerPlugin(NekoPluginBase):
             })
 
         result = await self._execute_command(command, shell)
+        self._diary_record(
+            "command",
+            f"执行命令（{shell}）：{command[:80]}",
+            ok=bool(result.get("success")),
+        )
         if not result.get("success") and result.get("timed_out"):
             return Err(SdkError(result.get("output", "命令执行超时")))
         return Ok(result)
@@ -1681,6 +1802,11 @@ class KeyboardControllerPlugin(NekoPluginBase):
         returncode = result.get("returncode")
         output = str(result.get("output") or "")
         timed_out = bool(result.get("timed_out"))
+        self._diary_record(
+            "command",
+            f"执行命令（{shell}）：{command[:80]}",
+            ok=success,
+        )
         async with self._pending_lock:
             for p in self._pending_commands:
                 if p.get("token") == token:
@@ -1949,6 +2075,10 @@ class KeyboardControllerPlugin(NekoPluginBase):
         result = await asyncio.to_thread(audio_analysis.capture_and_analyze, seconds)
         if not result.get("available"):
             return Err(SdkError(result.get("error", "音频分析不可用")))
+        self._diary_record(
+            "audio",
+            "分析主机音频：" + str(result.get("interpretation") or result.get("silence", "有声")),
+        )
         return Ok(result)
 
     @plugin_entry(
@@ -1962,6 +2092,204 @@ class KeyboardControllerPlugin(NekoPluginBase):
             **status,
             "capture_seconds_default": float(self._audio_capture_seconds),
             "capture_seconds_max": float(audio_analysis._CAPTURE_SECONDS_MAX),
+        })
+
+    # ── 日记 ─────────────────────────────────────────────────────────
+
+    @timer_interval(
+        id="diary_auto_flush",
+        seconds=diary.DEFAULT_AUTO_FLUSH_SECONDS,
+        name=tr("entries.diaryFlush.name", default="日记自动写盘"),
+        description="周期性把当天操作整理成 Markdown 日记写入 memories/。",
+        auto_start=True,
+    )
+    async def diary_auto_flush(self, **_):
+        await self._diary_flush_if_due()
+        return Ok({"flushed": True})
+
+    @llm_tool(
+        name="diary_status",
+        description=(
+            "查看日记功能的当前状态：是否启用、今天的日记目录、今天记录了多少条事件、"
+            "各类事件计数、是否已写盘。可用于回答\"今天做了什么\"的概览。"
+        ),
+        parameters={"type": "object", "properties": {}},
+        timeout=10.0,
+    )
+    @ui.action(
+        label=tr("actions.diaryStatus.label", default="Diary status"),
+        icon="D",
+        group="diary",
+        order=10,
+        refresh_context=False,
+    )
+    @plugin_entry(
+        id="diary_status",
+        name=tr("entries.diaryStatus.name", default="日记状态"),
+        description="查看日记功能状态与今天的记录统计。",
+    )
+    async def diary_status(self, **_) -> Any:
+        if self._diary is None:
+            return Ok({"enabled": False, "message": "日记未初始化"})
+        day = datetime.now().strftime("%Y-%m-%d")
+        counts = self._diary.counts(day)
+        return Ok({
+            "enabled": self._diary.enabled(),
+            "date": day,
+            "dir": str(self._diary_dir_path()),
+            "event_count": sum(counts.values()),
+            "counts": counts,
+            "summary": diary.summarize_counts(counts, locale=self._diary._locale),
+            "flushed": bool((self._diary_dir_path() / f"{day}.md").is_file()),
+            "auto_flush_seconds": self._diary_flush_seconds,
+            "max_events_per_day": self._diary._max_events_per_day,
+        })
+
+    @llm_tool(
+        name="diary_write_now",
+        description=(
+            "立即把今天已记录的操作整理成 Markdown 日记并写入 memories/YYYY-MM-DD.md。"
+            "用于在一天结束、或用户要求\"写日记/总结今天\"时主动落盘。"
+        ),
+        parameters={"type": "object", "properties": {}},
+        timeout=20.0,
+    )
+    @ui.action(
+        label=tr("actions.diaryWrite.label", default="Write diary now"),
+        icon="D",
+        group="diary",
+        order=20,
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="diary_write_now",
+        name=tr("entries.diaryWrite.name", default="立即写日记"),
+        description="把今天记录的操作整理成 Markdown 日记写入 memories/。",
+    )
+    async def diary_write_now(self, **_) -> Any:
+        day = datetime.now().strftime("%Y-%m-%d")
+        path = await self._diary_flush_if_due(force=True)
+        if path is None:
+            return Ok({"date": day, "written": False, "message": "今天还没有可写入的日记事件"})
+        return Ok({
+            "date": day,
+            "written": True,
+            "file": str(path),
+            "message": f"日记已写入 {path}",
+        })
+
+    @llm_tool(
+        name="diary_read",
+        description=(
+            "读取某一天的日记（Markdown 文本）。date 用 YYYY-MM-DD，留空读今天。"
+            "用于回顾\"某天做了什么\"、或把日记内容讲给用户听。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string",
+                    "description": "日期 YYYY-MM-DD，留空读今天",
+                },
+            },
+        },
+        timeout=10.0,
+    )
+    @plugin_entry(
+        id="diary_read",
+        name=tr("entries.diaryRead.name", default="读取日记"),
+        description="读取某一天的日记 Markdown 文本；date 留空读今天。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string",
+                    "description": "日期 YYYY-MM-DD，留空读今天",
+                },
+            },
+        },
+        llm_result_fields=["date", "event_count", "markdown", "message"],
+    )
+    async def diary_read(self, date: str = "", **_) -> Any:
+        if self._diary is None:
+            return Err(SdkError("日记未初始化"))
+        day = str(date or "").strip() or datetime.now().strftime("%Y-%m-%d")
+        data = self._diary.read_day(self._diary_dir_path(), day)
+        if not data["markdown"]:
+            return Ok({
+                "date": day,
+                "event_count": 0,
+                "markdown": "",
+                "message": f"{day} 没有日记记录",
+            })
+        return Ok({
+            "date": day,
+            "event_count": data["event_count"],
+            "markdown": data["markdown"],
+            "message": f"{day} 的日记（{data['event_count']} 条事件）",
+        })
+
+    @llm_tool(
+        name="diary_note",
+        description=(
+            "往今天的日记里追加一条随笔/文字记录。detail 是正文。"
+            "用于猫娘主动记下值得留存的感想、判断、约定等。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "detail": {"type": "string", "description": "随笔正文"},
+            },
+            "required": ["detail"],
+        },
+        timeout=10.0,
+    )
+    @plugin_entry(
+        id="diary_note",
+        name=tr("entries.diaryNote.name", default="日记随笔"),
+        description="往今天的日记追加一条随笔记录。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "detail": {"type": "string", "description": "随笔正文"},
+            },
+            "required": ["detail"],
+        },
+        llm_result_fields=["added", "detail", "message"],
+    )
+    async def diary_note(self, detail: str = "", **_) -> Any:
+        text = str(detail or "").strip()
+        if not text:
+            return Err(SdkError("随笔内容为空"))
+        self._diary_record("note", text)
+        return Ok({
+            "added": True,
+            "detail": text,
+            "message": "已记入今天的日记",
+        })
+
+    @plugin_entry(
+        id="set_diary_enabled",
+        name=tr("entries.setDiaryEnabled.name", default="开关日记"),
+        description="开启/关闭自动写日记（写入 store，重启保持）。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean", "description": "true=开启，false=关闭"},
+            },
+            "required": ["enabled"],
+        },
+        llm_result_fields=["enabled", "message"],
+    )
+    async def set_diary_enabled(self, enabled: bool, **_) -> Any:
+        value = bool(enabled)
+        self._diary_enabled = value
+        if self._diary is not None:
+            self._diary.set_enabled(value)
+        await self.store.set(_STORE_DIARY_KEY, value)
+        return Ok({
+            "enabled": value,
+            "message": f"自动写日记已{'开启' if value else '关闭'}",
         })
 
     # ── Hosted UI ───────────────────────────────────────────────────────
@@ -2009,6 +2337,18 @@ class KeyboardControllerPlugin(NekoPluginBase):
                 }
                 for p in self._pending_commands
             ]
+        diary_state = {
+            "enabled": bool(self._diary_enabled),
+            "dir": str(self._diary_dir_path()),
+        }
+        if self._diary is not None:
+            day = datetime.now().strftime("%Y-%m-%d")
+            counts = self._diary.counts(day)
+            diary_state["date"] = day
+            diary_state["event_count"] = sum(counts.values())
+            diary_state["counts"] = counts
+            diary_state["summary"] = diary.summarize_counts(counts, locale=self._diary._locale)
+            diary_state["flushed"] = bool((self._diary_dir_path() / f"{day}.md").is_file())
         return {
             "platform": sys.platform,
             "windows_supported": _is_windows(),
@@ -2022,5 +2362,6 @@ class KeyboardControllerPlugin(NekoPluginBase):
             "audio_available": bool(audio_info.get("available", False)),
             "command_require_confirmation": bool(self._command_require_confirmation),
             "pending_commands": pending,
+            "diary": diary_state,
             "message": None,
         }
