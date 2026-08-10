@@ -752,7 +752,6 @@ def _virtual_screen() -> tuple[int, int, int, int]:
 def mouse_move(x: int, y: int) -> None:
     if not is_windows():
         return
-    user32 = ctypes.windll.user32
     vx, vy, vw, vh = _virtual_screen()
     abs_x = int((int(x) - vx) * 65535 // vw)
     abs_y = int((int(y) - vy) * 65535 // vh)
@@ -789,7 +788,6 @@ def mouse_drag(x1: int, y1: int, x2: int, y2: int, *, button: str = "left", step
 
 
 def _mouse_button_down(button: str) -> None:
-    user32 = ctypes.windll.user32
     down_flag = {
         "left": MOUSEEVENTF_LEFTDOWN,
         "right": MOUSEEVENTF_RIGHTDOWN,
@@ -799,7 +797,6 @@ def _mouse_button_down(button: str) -> None:
 
 
 def _mouse_button_up(button: str) -> None:
-    user32 = ctypes.windll.user32
     up_flag = {
         "left": MOUSEEVENTF_LEFTUP,
         "right": MOUSEEVENTF_RIGHTUP,

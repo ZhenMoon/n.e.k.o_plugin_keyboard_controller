@@ -26,29 +26,28 @@ import uuid
 from typing import Any, Optional
 
 from plugin.sdk.plugin import (
+    Err,
     NekoPluginBase,
-    neko_plugin,
-    plugin_entry,
+    Ok,
+    SdkError,
     lifecycle,
     llm_tool,
-    ui,
+    neko_plugin,
+    plugin_entry,
     tr,
-    Ok,
-    Err,
-    SdkError,
+    ui,
     unwrap_or,
 )
 
-from . import _win32_input as win32
-from . import _screen_capture as capture
-from . import _command_exec as command_exec
 from . import _audio_analysis as audio_analysis
+from . import _command_exec as command_exec
 from . import _file_ops as file_ops
+from . import _screen_capture as capture
 from . import _template_match as template_match
+from . import _win32_input as win32
 from ._key_map import (
     KeySpecError,
     parse_combo,
-    parse_keys_list,
     supported_key_names,
 )
 

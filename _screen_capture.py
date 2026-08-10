@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import importlib
 import io
-import sys
 import threading
 from pathlib import Path
 from typing import Any, Optional
@@ -260,13 +260,7 @@ def close_ocr_backend() -> None:
 
 def describe_capture() -> dict[str, Any]:
     """Status payload for the panel and status entry."""
-    mss_ok = False
-    try:
-        import mss  # noqa: F401
-
-        mss_ok = True
-    except ImportError:
-        pass
+    mss_ok = importlib.util.find_spec("mss") is not None
     return {
         "windows_supported": is_windows(),
         "ocr_available": ocr_is_available(),
