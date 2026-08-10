@@ -1002,6 +1002,13 @@ class KeyboardControllerPlugin(NekoPluginBase):
         parameters={"type": "object", "properties": {}},
         timeout=15.0,
     )
+    @ui.action(
+        label=tr("actions.getWindowRect.label", default="Get window rect"),
+        icon="W",
+        group="target",
+        order=40,
+        refresh_context=False,
+    )
     @plugin_entry(
         id="get_window_rect",
         name=tr("entries.getWindowRect.name", default="获取窗口坐标"),
@@ -1041,6 +1048,13 @@ class KeyboardControllerPlugin(NekoPluginBase):
             "required": ["x", "y"],
         },
         timeout=20.0,
+    )
+    @ui.action(
+        label=tr("actions.clickInWindow.label", default="Click in window"),
+        icon="C",
+        group="input",
+        order=35,
+        refresh_context=False,
     )
     @plugin_entry(
         id="click_in_window",
@@ -1097,6 +1111,13 @@ class KeyboardControllerPlugin(NekoPluginBase):
             "required": ["template_path"],
         },
         timeout=60.0,
+    )
+    @ui.action(
+        label=tr("actions.findImage.label", default="Find image"),
+        icon="I",
+        group="capture",
+        order=30,
+        refresh_context=False,
     )
     @plugin_entry(
         id="find_image",

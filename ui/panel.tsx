@@ -93,6 +93,9 @@ export default function KeyboardControllerPanel(props: PluginSurfaceProps<Dashbo
   const confirmCmd = safeActions.find((action) => action.id === "confirm_command")
   const rejectCmd = safeActions.find((action) => action.id === "reject_command")
   const setCommandConfirm = safeActions.find((action) => action.id === "set_command_confirmation")
+  const getWindowRect = safeActions.find((action) => action.id === "get_window_rect")
+  const clickInWindow = safeActions.find((action) => action.id === "click_in_window")
+  const findImage = safeActions.find((action) => action.id === "find_image")
 
   const toast = useToast()
   const [searchQuery, setSearchQuery] = props.useLocalState<string>("searchQuery", "")
@@ -109,6 +112,12 @@ export default function KeyboardControllerPanel(props: PluginSurfaceProps<Dashbo
   const [audioResult, setAudioResult] = props.useLocalState<string>("audioResult", "")
   const [commandInput, setCommandInput] = props.useLocalState<string>("commandInput", "")
   const [commandOutput, setCommandOutput] = props.useLocalState<string>("commandOutput", "")
+  const [winRelX, setWinRelX] = props.useLocalState<string>("winRelX", "")
+  const [winRelY, setWinRelY] = props.useLocalState<string>("winRelY", "")
+  const [winRectResult, setWinRectResult] = props.useLocalState<string>("winRectResult", "")
+  const [imagePath, setImagePath] = props.useLocalState<string>("imagePath", "")
+  const [imageMode, setImageMode] = props.useLocalState<string>("imageMode", "target")
+  const [imageResult, setImageResult] = props.useLocalState<string>("imageResult", "")
   const [resultMessage, setResultMessage, debouncedResultMessage] = useDebouncedState("", 2500)
 
   const target = safeState.target || null
@@ -291,6 +300,62 @@ export default function KeyboardControllerPanel(props: PluginSurfaceProps<Dashbo
     } catch (error) {
       setCommandOutput("")
       setFeedback(error && error.message ? error.message : String(error))
+    }
+  }
+
+  const doGetWindowRect = async () => {
+    if (!getWindowRect) return
+    setWinRectResult("")
+    try {
+      const result = await props.api.call("get_window_rect", {})
+      const w = result?.window_rect
+      const c = result?.client_rect
+      if (w) {
+        const cw = c?.width ?? w.right - w.left
+        const ch = c?.height ?? w.bottom - w.top
+        setWinRectResult(t("panel.rect.result", { x: w.left, y: w.top, w: cw, h: ch }))
+      } else {
+        setWinRectResult(String(result?.message || ""))
+      }
+    } catch (error) {
+      setWinRectResult(error && error.message ? error.message : String(error))
+    }
+  }
+
+  const doClickInWindow = async () => {
+    if (!clickInWindow) return
+    const x = Number(winRelX) || 0
+    const y = Number(winRelY) || 0
+    try {
+      const result = await props.api.call("click_in_window", { x, y })
+      setFeedback(result?.message || t("panel.clickInWindow.done"))
+      toast.success(result?.message || t("panel.clickInWindow.done"))
+    } catch (error) {
+      setFeedback(error && error.message ? error.message : String(error))
+    }
+  }
+
+  const doFindImage = async () => {
+    if (!findImage) return
+    const path = String(imagePath || "").trim()
+    if (!path) {
+      setFeedback(t("panel.findImage.needPath"))
+      return
+    }
+    setImageResult("")
+    try {
+      const result = await props.api.call("find_image", { template_path: path, mode: imageMode })
+      const matches = Array.isArray(result?.matches) ? result.matches : []
+      if (matches.length === 0) {
+        setImageResult(t("panel.findImage.noMatch"))
+      } else {
+        const lines = matches.map((mm: { x?: number; y?: number; score?: number }) =>
+          `(${mm.x}, ${mm.y}) score=${mm.score ?? ""}`
+        )
+        setImageResult(lines.join("\n"))
+      }
+    } catch (error) {
+      setImageResult(error && error.message ? error.message : String(error))
     }
   }
 
@@ -490,6 +555,67 @@ export default function KeyboardControllerPanel(props: PluginSurfaceProps<Dashbo
             </>
           ) : null}
           <Tip>{t("panel.capture.tip")}</Tip>
+        </Stack>
+      </Card>
+
+      <Card title={t("panel.rect.title")}>
+        <Stack>
+          <ButtonGroup>
+            {getWindowRect ? (
+              <Button tone="primary" onClick={doGetWindowRect}>
+                {t("panel.rect.get")}
+              </Button>
+            ) : null}
+          </ButtonGroup>
+          {winRectResult ? (
+            <>
+              <Divider />
+              <pre className="neko-pre">{winRectResult}</pre>
+            </>
+          ) : null}
+          <Divider />
+          <Grid cols={2}>
+            <Field label={t("panel.rect.relX")}>
+              <Input value={winRelX} placeholder="0" onChange={setWinRelX} />
+            </Field>
+            <Field label={t("panel.rect.relY")}>
+              <Input value={winRelY} placeholder="0" onChange={setWinRelY} />
+            </Field>
+          </Grid>
+          <ButtonGroup>
+            {clickInWindow ? (
+              <Button tone="success" onClick={doClickInWindow}>
+                {t("panel.rect.clickRel")}
+              </Button>
+            ) : null}
+          </ButtonGroup>
+          <Tip>{t("panel.rect.tip")}</Tip>
+        </Stack>
+      </Card>
+
+      <Card title={t("panel.findImage.title")}>
+        <Stack>
+          <Field label={t("panel.findImage.path")} help={t("panel.findImage.pathHelp")}>
+            <Input value={imagePath} placeholder="icon.png" onChange={setImagePath} />
+          </Field>
+          <Field label={t("panel.findImage.mode")}>
+            <Select value={imageMode} options={captureModeOptions} onChange={setImageMode} />
+          </Field>
+          <ButtonGroup>
+            {findImage ? (
+              <Button tone="primary" onClick={doFindImage}>
+                {t("panel.findImage.run")}
+              </Button>
+            ) : null}
+          </ButtonGroup>
+          {imageResult ? (
+            <>
+              <Divider />
+              <Text>{t("panel.findImage.result")}</Text>
+              <pre className="neko-pre">{imageResult}</pre>
+            </>
+          ) : null}
+          <Tip>{t("panel.findImage.tip")}</Tip>
         </Stack>
       </Card>
 
