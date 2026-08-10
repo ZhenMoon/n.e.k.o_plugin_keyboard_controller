@@ -2096,13 +2096,7 @@ class KeyboardControllerPlugin(NekoPluginBase):
 
     # ── 日记 ─────────────────────────────────────────────────────────
 
-    @timer_interval(
-        id="diary_auto_flush",
-        seconds=3600,
-        name=tr("entries.diaryFlush.name", default="日记自动写盘"),
-        description="周期性把当天操作整理成 Markdown 日记写入 memories/。",
-        auto_start=True,
-    )
+    @timer_interval(id="diary_auto_flush", seconds=3600, auto_start=True)
     async def diary_auto_flush(self, **_):
         await self._diary_flush_if_due()
         return Ok({"flushed": True})
