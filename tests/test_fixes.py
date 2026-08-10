@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -46,7 +47,9 @@ def test_unicode_units_bmp_single_unit() -> None:
 def test_powershell_uses_encoded_command() -> None:
     ce = _load_module("_command_exec_test", "_command_exec.py")
     argv = ce._build_command("Get-Process", "powershell")
-    assert argv and argv[0] == "powershell.exe"
+    assert argv
+    exe = "powershell.exe" if ce.is_windows() else "pwsh"
+    assert argv[0] == exe
     assert "-EncodedCommand" in argv
     assert len(argv) == argv.index("-EncodedCommand") + 2
     # No bare -Command fallback for powershell.
@@ -62,10 +65,13 @@ def test_powershell_encode_nonempty() -> None:
 def test_file_ops_rejects_path_traversal() -> None:
     fo = _load_module("_file_ops_test", "_file_ops.py")
     root = str(Path(__file__).resolve().parents[2])
-    # 绝对路径逃逸
-    assert fo.resolve_path(root, r"C:\Windows\System32\drivers\etc\hosts") is None
-    # 相对穿越
-    assert fo.resolve_path(root, "..\\..\\..\\..\\Windows\\win.ini") is None
+    # 相对穿越(跨平台)
+    assert fo.resolve_path(root, ".." + os.sep * 5 + "etc" + os.sep + "hosts") is None
+    assert fo.resolve_path(root, ".." + os.sep + ".." + os.sep + ".." + os.sep + ".." + os.sep) is None
+    # 绝对路径逃逸(Windows 盘符语义在 Windows 上才会被 os.path 识别)
+    if os.name == "nt":
+        assert fo.resolve_path(root, r"C:\Windows\System32\drivers\etc\hosts") is None
+        assert fo.resolve_path(root, "..\\..\\..\\..\\Windows\\win.ini") is None
     # 正常相对路径
     inner = fo.resolve_path(root, ".")
     assert inner is not None and Path(inner).is_dir()
