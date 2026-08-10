@@ -10,6 +10,10 @@ env:
   NEKO_REPOSITORY: Project-N-E-K-O/N.E.K.O
   NEKO_REF: main
 
+permissions:
+  contents: read
+  statuses: write
+
 jobs:
   verify:
     runs-on: ubuntu-latest
