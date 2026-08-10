@@ -1,5 +1,7 @@
 # 按键控制（keyboard_controller）
 
+[![Verify](https://github.com/ZhenMoon/n.e.k.o_plugin_keyboard_controller/actions/workflows/verify.yml/badge.svg)](https://github.com/ZhenMoon/n.e.k.o_plugin_keyboard_controller/actions/workflows/verify.yml)
+
 让猫娘通过键盘/鼠标操作电脑上的游戏或软件，并支持**截图 + OCR** 读屏、**shell 命令执行**、**工作区文件读写（vibe-coding）**与**主机音频分析**。
 
 ## 功能
